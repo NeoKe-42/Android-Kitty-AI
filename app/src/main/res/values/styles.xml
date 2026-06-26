@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.KittyAI" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="colorAccent">@color/kitty_pink</item>
+        <item name="android:navigationBarColor">#FFF4F7</item>
+        <item name="android:statusBarColor">#FFF4F7</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
