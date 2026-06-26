@@ -7,21 +7,21 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.ViewModelProvider
 
 /**
- * Main launcher activity for the Kitty bedtime story app.
- * Uses Jetpack Compose for the UI.
+ * Main launcher activity for the Kitty AI chat app.
+ * Uses Jetpack Compose for the UI, supports both chat and bedtime stories.
  */
 class BedtimeActivity : ComponentActivity() {
 
-    private lateinit var viewModel: BedtimeViewModel
+    private lateinit var viewModel: ChatViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        viewModel = ViewModelProvider(this)[BedtimeViewModel::class.java]
+        viewModel = ViewModelProvider(this)[ChatViewModel::class.java]
 
         setContent {
-            BedtimeScreen(viewModel = viewModel)
+            ChatScreen(viewModel = viewModel)
         }
     }
 }

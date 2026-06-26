@@ -14,37 +14,42 @@ import kotlinx.coroutines.withContext
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.UUID
 
 /**
- * UI state for the bedtime story screen.
+ * UI state for the unified chat screen.
  */
-data class BedtimeUiState(
+data class ChatUiState(
+    val messages: List<ChatMessage> = listOf(),
     val inputText: String = "",
     val isLoading: Boolean = false,
-    val storyId: String? = null,
-    val title: String = "",
-    val storyText: String = "",
-    val audioUrl: String? = null,
-    val statusMessage: String = "想听什么故事呀？",
+    val statusMessage: String = "想和 Kitty 说什么？",
     val errorMessage: String? = null,
-    val playerState: AudioPlayer.PlayerState = AudioPlayer.PlayerState.IDLE
+    val currentAudioUrl: String? = null,
+    val isPlaying: Boolean = false,
+    val isPaused: Boolean = false
 )
 
 /**
- * ViewModel for the bedtime story screen.
- * Owns the AudioPlayer, manages network calls, and exposes UI state.
+ * ViewModel for the unified Kitty AI chat screen.
+ * Handles both normal chat and bedtime story via POST /api/chat.
  */
-class BedtimeViewModel(application: Application) : AndroidViewModel(application) {
+class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _uiState = MutableStateFlow(BedtimeUiState())
-    val uiState: StateFlow<BedtimeUiState> = _uiState.asStateFlow()
+    private val _uiState = MutableStateFlow(ChatUiState())
+    val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     private val api: KittyApiService = KittyApiService.create()
     val audioPlayer: AudioPlayer = AudioPlayer(application)
 
     init {
         audioPlayer.onStateChanged = { newState ->
-            _uiState.update { it.copy(playerState = newState) }
+            _uiState.update {
+                it.copy(
+                    isPlaying = newState == AudioPlayer.PlayerState.PLAYING,
+                    isPaused = newState == AudioPlayer.PlayerState.PAUSED
+                )
+            }
             updateStatusFromPlayerState(newState)
         }
         audioPlayer.onError = { msg ->
@@ -72,139 +77,124 @@ class BedtimeViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(inputText = text, errorMessage = null) }
     }
 
-    fun quickFill(text: String) {
-        _uiState.update { it.copy(inputText = text, errorMessage = null) }
-    }
-
-    fun generateStory() {
-        val currentState = _uiState.value
-        if (currentState.isLoading) {
+    fun sendMessage() {
+        val state = _uiState.value
+        if (state.isLoading) {
             Log.d(TAG, "Already loading, ignoring duplicate request")
             return
         }
 
-        // Stop any playing audio first
-        audioPlayer.stop()
+        val message = state.inputText.trim().ifBlank { ApiConfig.DEFAULT_MESSAGE }
 
-        val message = currentState.inputText.trim().ifBlank {
-            ApiConfig.DEFAULT_MESSAGE
-        }
-
+        // Add user message
+        val userMsg = ChatMessage(
+            id = UUID.randomUUID().toString(),
+            role = MessageRole.USER,
+            text = message
+        )
         _uiState.update {
             it.copy(
+                messages = it.messages + userMsg,
+                inputText = "",
                 isLoading = true,
                 errorMessage = null,
-                statusMessage = "Kitty 正在准备故事...",
-                title = "",
-                storyText = "",
-                audioUrl = null,
-                storyId = null,
-                playerState = AudioPlayer.PlayerState.IDLE
+                statusMessage = "Kitty 正在想..."
             )
         }
 
         viewModelScope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
-                    api.generateBedtimeStory(BedtimeRequest(message))
+                    api.sendChatMessage(ChatRequest(message))
                 }
 
                 if (!response.isSuccessful) {
-                    val code = response.code()
-                    val errorBody = response.errorBody()?.string() ?: ""
-                    Log.e(TAG, "HTTP $code: $errorBody")
-
-                    val friendlyMsg = when {
-                        code in 500..599 -> "Kitty 的服务器刚刚打了个喷嚏，再试一次好不好？"
-                        code == 404 -> "Kitty 找不到这条路了。"
-                        else -> "网络好像不太好，Kitty 连不上服务器。"
-                    }
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = friendlyMsg,
-                            statusMessage = friendlyMsg
-                        )
-                    }
+                    handleHttpError(response.code())
                     return@launch
                 }
 
                 val body = response.body()
                 if (body == null) {
-                    val msg = "Kitty 刚刚没讲出来，再试一次好不好？"
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = msg,
-                            statusMessage = msg
-                        )
-                    }
+                    handleError("Kitty 刚刚没讲出来，再试一次好不好？")
                     return@launch
                 }
 
-                // Check success flag
                 if (body.success != true) {
-                    val errMsg = body.error ?: "Kitty 刚刚没讲出来，再试一次好不好？"
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = errMsg,
-                            statusMessage = errMsg
-                        )
-                    }
+                    handleError(body.error ?: "Kitty 走神了，再试一次好不好？")
                     return@launch
                 }
 
-                // Success — populate UI
-                val title = body.title ?: "Kitty 的睡前故事"
-                val storyText = body.text ?: ""
+                val mode = body.mode ?: "chat"
+                val reply = body.reply ?: ""
+                val title = body.title
                 val audioUrl = body.audioUrl
 
-                if (storyText.isBlank() && audioUrl.isNullOrBlank()) {
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = "故事内容空空的，Kitty 可能走神了。",
-                            statusMessage = "故事内容空空的，Kitty 可能走神了。"
-                        )
-                    }
-                    return@launch
-                }
+                // Add Kitty message
+                val kittyMsg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    role = MessageRole.KITTY,
+                    text = reply,
+                    title = title,
+                    mode = mode,
+                    audioUrl = audioUrl,
+                    storyId = body.storyId
+                )
 
                 _uiState.update {
                     it.copy(
+                        messages = it.messages + kittyMsg,
                         isLoading = false,
-                        storyId = body.storyId,
-                        title = title,
-                        storyText = storyText,
-                        audioUrl = audioUrl,
-                        statusMessage = "故事准备好了",
+                        statusMessage = if (mode == "bedtime") "故事准备好了" else "",
+                        currentAudioUrl = audioUrl,
                         errorMessage = null
                     )
                 }
 
-                // Auto-play audio
-                audioPlayer.prepare(audioUrl)
-                audioPlayer.play()
+                // Auto-play for bedtime stories
+                if (mode == "bedtime" && !audioUrl.isNullOrBlank()) {
+                    audioPlayer.prepare(audioUrl)
+                    audioPlayer.play()
+                }
 
-                Log.d(TAG, "Story ready: storyId=${body.storyId}, audioUrl=$audioUrl")
+                Log.d(TAG, "Reply ready: mode=$mode, audioUrl=$audioUrl")
 
             } catch (e: UnknownHostException) {
-                handleNetworkError("网络好像不太好，Kitty 连不上服务器。")
+                handleError("网络好像不太好，Kitty 连不上服务器。")
             } catch (e: ConnectException) {
-                handleNetworkError("网络好像不太好，Kitty 连不上服务器。")
+                handleError("网络好像不太好，Kitty 连不上服务器。")
             } catch (e: SocketTimeoutException) {
-                handleNetworkError("Kitty 等了好久都没等到故事，再试一次好不好？")
+                handleError("Kitty 等了好久都没等到回复，再试一次好不好？")
             } catch (e: Exception) {
                 Log.e(TAG, "Unexpected error", e)
-                handleNetworkError("唔，Kitty 刚刚没讲出来，再试一次好不好？")
+                handleError("唔，Kitty 刚刚没讲出来，再试一次好不好？")
             }
         }
     }
 
-    private fun handleNetworkError(msg: String) {
+    fun sendQuickMessage(text: String) {
+        _uiState.update { it.copy(inputText = text) }
+        sendMessage()
+    }
+
+    private fun handleHttpError(code: Int) {
+        val msg = when {
+            code in 500..599 -> "Kitty 的服务器刚刚打了个喷嚏，再试一次好不好？"
+            code == 404 -> "Kitty 找不到这条路了。"
+            else -> "网络好像不太好，Kitty 连不上服务器。"
+        }
+        handleError(msg)
+    }
+
+    private fun handleError(msg: String) {
+        // Add error as a Kitty message
+        val errorMsg = ChatMessage(
+            id = UUID.randomUUID().toString(),
+            role = MessageRole.KITTY,
+            text = msg
+        )
         _uiState.update {
             it.copy(
+                messages = it.messages + errorMsg,
                 isLoading = false,
                 errorMessage = msg,
                 statusMessage = msg
@@ -214,36 +204,22 @@ class BedtimeViewModel(application: Application) : AndroidViewModel(application)
 
     // ---- audio controls ----
 
-    fun play() {
-        val url = _uiState.value.audioUrl
+    fun play(audioUrl: String?) {
+        val url = audioUrl ?: _uiState.value.currentAudioUrl
         if (url != null) {
             audioPlayer.prepare(url)
             audioPlayer.play()
         } else {
             _uiState.update {
-                it.copy(
-                    errorMessage = "还没有故事可以播放哦~",
-                    statusMessage = "还没有故事可以播放哦~"
-                )
+                it.copy(errorMessage = "还没有声音可以播放哦~", statusMessage = "还没有声音可以播放哦~")
             }
         }
     }
 
-    fun pause() {
-        audioPlayer.pause()
-    }
-
-    fun resume() {
-        audioPlayer.resume()
-    }
-
-    fun stop() {
-        audioPlayer.stop()
-    }
-
-    fun replay() {
-        audioPlayer.replay()
-    }
+    fun pause() = audioPlayer.pause()
+    fun resume() = audioPlayer.resume()
+    fun stop() = audioPlayer.stop()
+    fun replay() = audioPlayer.replay()
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
@@ -256,6 +232,6 @@ class BedtimeViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
-        private const val TAG = "BedtimeViewModel"
+        private const val TAG = "ChatViewModel"
     }
 }

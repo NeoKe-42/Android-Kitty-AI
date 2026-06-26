@@ -8,9 +8,10 @@ object ApiConfig {
     /** Server base URL — must end with "/" for Retrofit */
     const val BASE_URL = "http://47.95.111.58:8000/"
 
+    const val CHAT_ENDPOINT = "api/chat"
     const val BEDTIME_ENDPOINT = "api/bedtime"
     const val HEALTH_ENDPOINT = "api/health"
 
-    /** Default story prompt when user leaves input empty */
-    const val DEFAULT_MESSAGE = "给妹妹讲一个三分钟的小猫故事"
+    /** Default message when user leaves input empty */
+    const val DEFAULT_MESSAGE = "你好呀"
 }

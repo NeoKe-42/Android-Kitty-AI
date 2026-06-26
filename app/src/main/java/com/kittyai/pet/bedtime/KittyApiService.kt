@@ -10,8 +10,13 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import java.util.concurrent.TimeUnit
 
-/** Retrofit service interface for the Kitty bedtime story API. */
+/** Retrofit service interface for the Kitty AI API. */
 interface KittyApiService {
+
+    @POST(ApiConfig.CHAT_ENDPOINT)
+    suspend fun sendChatMessage(
+        @Body request: ChatRequest
+    ): Response<ChatResponse>
 
     @POST(ApiConfig.BEDTIME_ENDPOINT)
     suspend fun generateBedtimeStory(
